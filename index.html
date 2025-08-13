@@ -87,7 +87,11 @@
             <div><label for="dd-gender">Gender</label><select id="dd-gender"></select></div>
             <div><label for="data-salary">SALARY EXPECTATION</label><input type="text" id="data-salary" placeholder="Ej: 50,000 EUR"></div>
         </div>
-        <div class="grid" style="margin-top: 1.5rem;"><div style="grid-column: 1 / -1;"><label for="dd-language">LANGUAJE <small>(Mantén Ctrl/Cmd para seleccionar varios)</small></label><input type="text" id="language-search" placeholder="Buscar idioma..." style="margin-bottom: 0.5rem; background-color: #fff;"><select id="dd-language" multiple></select></div></div>
+        <div class="grid" style="margin-top: 1.5rem;"><div style="grid-column: 1 / -1;">
+                <label for="dd-languaje">LANGUAJE <small>(Mantén Ctrl/Cmd para seleccionar varios)</small></label>
+                <input type="text" id="languaje-search" placeholder="Buscar idioma..." style="margin-bottom: 0.5rem; background-color: #fff;">
+                <select id="dd-languaje" multiple></select>
+                </div></div>
     </div>
     <div class="button-group"><button class="btn secondary" id="parse-btn">2. Analizar con IA</button><button class="btn" id="send-btn" disabled>3. Enviar a Notion</button></div>
     <div id="message-box" class="message"></div>
@@ -112,10 +116,10 @@ const GEMINI_API_URL_BASE = "https://generativelanguage.googleapis.com/v1beta/mo
 
 // ---------- ELEMENTOS DEL DOM ----------
 const tokenInput = document.getElementById('notion-token'), geminiKeyInput = document.getElementById('gemini-key'),
-      languageSearchInput = document.getElementById('language-search'),
+      languajeSearchInput = document.getElementById('languaje-search'), // Corregido
       stageSelect = document.getElementById('dd-stage'), resolutionSelect = document.getElementById('dd-resolution'),
       statusSelect = document.getElementById('dd-status'), sourceSelect = document.getElementById('dd-source'),
-      genderSelect = document.getElementById('dd-gender'), languageSelect = document.getElementById('dd-language'),
+      genderSelect = document.getElementById('dd-gender'), languajeSelect = document.getElementById('dd-languaje'), // Corregido
       parseBtn = document.getElementById('parse-btn'), sendBtn = document.getElementById('send-btn'),
       messageBox = document.getElementById('message-box'), parsedDataSection = document.getElementById('parsed-data-section'),
       dataFields = {
@@ -133,9 +137,10 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 tokenInput.addEventListener('change', () => { localStorage.setItem('notionApiToken', tokenInput.value); loadDropdownData(); });
 geminiKeyInput.addEventListener('change', () => localStorage.setItem('geminiApiKey', geminiKeyInput.value));
-languageSearchInput.addEventListener('keyup', () => {
-    const filter = languageSearchInput.value.toLowerCase();
-    Array.from(languageSelect.options).forEach(opt => {
+
+languajeSearchInput.addEventListener('keyup', () => {
+    const filter = languajeSearchInput.value.toLowerCase();
+    Array.from(languajeSelect.options).forEach(opt => {
         opt.style.display = opt.textContent.toLowerCase().includes(filter) ? "" : "none";
     });
 });
@@ -243,6 +248,15 @@ async function getAiParsedData(apiKey, cvText) {
     const prompt = `Eres un asistente experto en Recursos Humanos. Analiza el siguiente CV y devuelve un JSON con esta estructura: { "name": "string", "email": "string", "phone": "string", "location": "string", "linkedin": "string", "company": "string", "skills": ["string", "Array con MÁXIMO 3 skills. Una DEBE ser el título del último puesto. Las otras dos deben ser las tecnologías más relevantes."], "salary": "string" }. Si no encuentras un dato, déjalo vacío. Extrae la información de: --- ${cvText} ---`;
     const payload = { contents: [{ parts: [{ text: prompt }] }] };
     const data = await callApiProxy(GEMINI_API_URL_BASE + apiKey, 'POST', {}, payload);
+    
+    if (!data.candidates || data.candidates.length === 0) {
+        console.error("Respuesta de la IA sin 'candidates':", data);
+        if (data.promptFeedback && data.promptFeedback.blockReason) {
+            throw new Error(`La respuesta de la IA fue bloqueada por seguridad. Razón: ${data.promptFeedback.blockReason}`);
+        }
+        throw new Error("La IA devolvió una respuesta inesperada o vacía.");
+    }
+    
     const textResponse = data.candidates[0].content.parts[0].text;
     const jsonMatch = textResponse.match(/```json\n([\s\S]*?)\n```/);
     if (!jsonMatch) throw new Error("La IA no devolvió un JSON válido.");
@@ -256,6 +270,7 @@ async function loadDropdownData() {
         const dbInfo = await callApiProxy(`${NOTION_API_URL}/databases/${NOTION_DATABASE_ID}`, 'GET', headers);
         
         const populate = (propName, el) => {
+            if (!el) { console.error(`Elemento del DOM no encontrado para ${propName}`); return; }
             const prop = dbInfo.properties[propName];
             if (prop) {
                 const opts = prop.select?.options || prop.multi_select?.options || prop.status?.options;
@@ -304,7 +319,7 @@ async function createNotionEntry() {
     
     if (statusSelect.value) properties.Status = { status: { name: statusSelect.value } };
     
-    const selectedLangs = Array.from(languageSelect.options).filter(o => o.selected).map(o => ({ name: o.value }));
+    const selectedLangs = Array.from(languajeSelect.options).filter(o => o.selected).map(o => ({ name: o.value }));
     if (selectedLangs.length > 0) properties.LANGUAJE = { multi_select: selectedLangs };
     
     const phoneVal = dataFields.phone.value; if (phoneVal) properties.Phone = { phone_number: phoneVal };
