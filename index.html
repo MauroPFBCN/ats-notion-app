@@ -64,6 +64,22 @@
         .message.success { background-color: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
         .message.error { background-color: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
         .message.info { background-color: #e0f2fe; color: #075985; border: 1px solid #bae6fd; }
+        
+        /* Estilos del Pop-up Modal */
+        .modal-backdrop {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0,0,0,0.5); display: none; justify-content: center; align-items: center; z-index: 1000;
+        }
+        .modal-content {
+            background-color: #fff; padding: 2rem; border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 90%; max-width: 500px;
+            text-align: center;
+        }
+        .modal-content h3 { margin-top: 0; }
+        .modal-content p { color: var(--secondary-color); }
+        .modal-content a { color: var(--primary-color); font-weight: 600; text-decoration: none; }
+        .modal-content a:hover { text-decoration: underline; }
+        .modal-buttons { display: flex; gap: 1rem; margin-top: 1.5rem; }
     </style>
 </head>
 <body>
@@ -104,6 +120,18 @@
         </div></div>
     </div>
 </div>
+
+<div id="duplicate-modal" class="modal-backdrop">
+    <div class="modal-content">
+        <h3>⚠️ Candidato Duplicado</h3>
+        <p id="modal-text">Ya existe un candidato con este email.</p>
+        <div class="modal-buttons">
+            <button id="modal-cancel-btn" class="btn secondary">Anular</button>
+            <button id="modal-confirm-btn" class="btn">Crear registro de todas formas</button>
+        </div>
+    </div>
+</div>
+
 <script>
 // ---------- CONFIGURACIÓN ----------
 const NOTION_DATABASE_ID = "e6cf390e4b8546e8a5e0d25eba52d598";
@@ -118,6 +146,8 @@ const tokenInput = document.getElementById('notion-token'), geminiKeyInput = doc
       genderSelect = document.getElementById('dd-gender'), languajeSelect = document.getElementById('dd-languaje'),
       parseBtn = document.getElementById('parse-btn'), sendBtn = document.getElementById('send-btn'),
       messageBox = document.getElementById('message-box'), parsedDataSection = document.getElementById('parsed-data-section'),
+      duplicateModal = document.getElementById('duplicate-modal'), modalText = document.getElementById('modal-text'),
+      modalCancelBtn = document.getElementById('modal-cancel-btn'), modalConfirmBtn = document.getElementById('modal-confirm-btn'),
       dataFields = {
         name: document.getElementById('data-name'), email: document.getElementById('data-email'), phone: document.getElementById('data-phone'),
         location: document.getElementById('data-location'), linkedin: document.getElementById('data-linkedin'),
@@ -181,8 +211,46 @@ parseBtn.addEventListener('click', async () => {
     }
 });
 
+// **MODIFICADO**: Lógica de envío con verificación de duplicados
 sendBtn.addEventListener('click', async () => {
-    sendBtn.disabled = true; sendBtn.textContent = 'Enviando...';
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Verificando...';
+    
+    const email = dataFields.email.value.trim();
+
+    // Si no hay email, o si el nombre está vacío, no podemos continuar.
+    if (!dataFields.name.value) {
+        showMessage('error', "El campo 'Nombre y Apellido' es obligatorio.");
+        sendBtn.disabled = false;
+        sendBtn.textContent = '3. Enviar a Notion';
+        return;
+    }
+    
+    // Si no hay email, creamos directamente.
+    if (!email) {
+        await proceedWithCreation();
+        return;
+    }
+
+    try {
+        const duplicates = await findDuplicateByEmail(email);
+        if (duplicates.length > 0) {
+            const existing = duplicates[0];
+            const name = existing.properties["Nombre y Apellido"].title[0].plain_text;
+            const url = existing.url;
+            showDuplicateModal(name, url);
+        } else {
+            await proceedWithCreation();
+        }
+    } catch (error) {
+        showMessage('error', `Error al verificar duplicados: ${error.message}`);
+        sendBtn.disabled = false;
+        sendBtn.textContent = '3. Enviar a Notion';
+    }
+});
+
+async function proceedWithCreation() {
+    sendBtn.textContent = 'Enviando...';
     try {
         const newPage = await createNotionEntry();
         showMessage('success', '¡Candidato creado con éxito!', 3000);
@@ -190,9 +258,25 @@ sendBtn.addEventListener('click', async () => {
     } catch (error) {
         showMessage('error', `Error al enviar a Notion: ${error.message}`);
     } finally {
-        sendBtn.disabled = false; sendBtn.textContent = '3. Enviar a Notion';
+        sendBtn.disabled = false;
+        sendBtn.textContent = '3. Enviar a Notion';
     }
+}
+
+// Lógica del Modal de Duplicados
+modalCancelBtn.addEventListener('click', () => {
+    duplicateModal.style.display = 'none';
+    sendBtn.disabled = false;
+    sendBtn.textContent = '3. Enviar a Notion';
 });
+modalConfirmBtn.addEventListener('click', async () => {
+    duplicateModal.style.display = 'none';
+    await proceedWithCreation();
+});
+function showDuplicateModal(name, url) {
+    modalText.innerHTML = `Ya existe un registro con este email a nombre de: <br><strong><a href="${url}" target="_blank">${name}</a></strong>`;
+    duplicateModal.style.display = 'flex';
+}
 
 function populateFormFields(data) {
     Object.keys(data).forEach(key => {
@@ -243,14 +327,7 @@ async function getAiParsedData(apiKey, cvText) {
     const prompt = `Eres un asistente experto en Recursos Humanos. Analiza el siguiente CV y devuelve un JSON con esta estructura: { "name": "string", "email": "string", "phone": "string", "location": "string; extrae SOLAMENTE la Ciudad y el País, en formato 'Ciudad, País'. Ignora calles o códigos postales.", "linkedin": "string, URL completa", "company": "string", "skills": ["string", "Array con MÁXIMO 3 skills. Una DEBE ser el título del último puesto. Las otras dos deben ser las tecnologías más relevantes."], "salary": "string" }. Si no encuentras un dato, déjalo vacío. Extrae la información de: --- ${cvText} ---`;
     const payload = { contents: [{ parts: [{ text: prompt }] }] };
     const data = await callApiProxy(GEMINI_API_URL_BASE + apiKey, 'POST', {}, payload);
-    
-    if (!data.candidates || data.candidates.length === 0) {
-        if (data.promptFeedback && data.promptFeedback.blockReason) {
-            throw new Error(`La IA bloqueó la respuesta. Razón: ${data.promptFeedback.blockReason}`);
-        }
-        throw new Error("La IA devolvió una respuesta inesperada.");
-    }
-    
+    if (!data.candidates) throw new Error("La IA devolvió una respuesta inesperada.");
     const textResponse = data.candidates[0].content.parts[0].text;
     const jsonMatch = textResponse.match(/```json\n([\s\S]*?)\n```/);
     if (!jsonMatch) throw new Error("La IA no devolvió un JSON válido.");
@@ -262,77 +339,53 @@ async function loadDropdownData() {
     try {
         const headers = { 'Authorization': `Bearer ${tokenInput.value}`, 'Notion-Version': '2022-06-28' };
         const dbInfo = await callApiProxy(`${NOTION_API_URL}/databases/${NOTION_DATABASE_ID}`, 'GET', headers);
-        
-        const populate = (propName, el) => {
-            if (!el) { console.error(`Elemento del DOM no encontrado: ${propName}`); return; }
-            const prop = dbInfo.properties[propName];
-            if (prop) {
-                const opts = prop.select?.options || prop.multi_select?.options || prop.status?.options;
-                if (opts) populateSelect(el, opts, propName);
-            }
+        const populate = (pName, el) => {
+            if (!el) return; const prop = dbInfo.properties[pName];
+            if (prop) { const opts = prop.select?.options || prop.multi_select?.options || prop.status?.options; if (opts) populateSelect(el, opts, pName); }
         };
-        ['STAGE', 'RESOLUTION', 'Status', 'SOURCE', 'Gender', 'LANGUAJE'].forEach(p => {
-            const elId = `dd-${p.toLowerCase()}`;
-            populate(p, document.getElementById(elId));
-        });
+        ['STAGE', 'RESOLUTION', 'Status', 'SOURCE', 'Gender', 'LANGUAJE'].forEach(p => populate(p, document.getElementById(`dd-${p.toLowerCase()}`)));
         showMessage('success', 'Datos de Notion cargados.', 3000);
-    } catch (error) {
-        showMessage('error', `No se pudieron cargar los datos de Notion: ${error.message}`);
-    }
+    } catch (error) { showMessage('error', `No se pudieron cargar los datos de Notion: ${error.message}`); }
 }
 
 function populateSelect(selectElement, options, propertyName) {
     selectElement.innerHTML = '';
-    
-    // **MODIFICACIÓN**: Solo LANGUAJE tiene orden personalizado. El resto mantiene el orden de Notion.
-    if (propertyName === 'LANGUAJE') {
-        options.sort((a, b) => {
-            const nameA = a.name.toLowerCase(), nameB = b.name.toLowerCase();
-            let pA = 2, pB = 2;
+    if (propertyName !== 'LANGUAJE') { /* No ordenar alfabéticamente, mantener orden de Notion */ }
+    else { options.sort((a, b) => { /* Lógica de orden para idiomas */
+            const nameA = a.name.toLowerCase(), nameB = b.name.toLowerCase(); let pA = 2, pB = 2;
             if (nameA.startsWith('english')) pA = 0; else if (nameA.startsWith('spanish')) pA = 1;
             if (nameB.startsWith('english')) pB = 0; else if (nameB.startsWith('spanish')) pB = 1;
-            if (pA !== pB) return pA - pB;
-            return nameA.localeCompare(nameB);
+            if (pA !== pB) return pA - pB; return nameA.localeCompare(nameB);
         });
     }
+    if (!selectElement.multiple) selectElement.innerHTML = '<option value="" disabled selected>Seleccionar...</option>';
+    options.forEach(opt => { const o = document.createElement('option'); o.value = opt.name; o.textContent = opt.name; selectElement.appendChild(o); });
+}
 
-    if (!selectElement.multiple) {
-        selectElement.innerHTML = '<option value="" disabled selected>Seleccionar...</option>';
-    }
-    options.forEach(opt => {
-        const optionEl = document.createElement('option');
-        optionEl.value = opt.name;
-        optionEl.textContent = opt.name;
-        selectElement.appendChild(optionEl);
-    });
+// **NUEVA FUNCIÓN**: Buscar duplicados por email
+async function findDuplicateByEmail(email) {
+    const headers = { 'Authorization': `Bearer ${tokenInput.value}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' };
+    const body = { filter: { property: 'Email', email: { equals: email } } };
+    const response = await callApiProxy(`${NOTION_API_URL}/databases/${NOTION_DATABASE_ID}/query`, 'POST', headers, body);
+    return response.results;
 }
 
 async function createNotionEntry() {
-    if (!dataFields.name.value) throw new Error("El 'Nombre y Apellido' es obligatorio.");
     const properties = { "Nombre y Apellido": { title: [{ text: { content: dataFields.name.value } }] } };
-    
     const addSelect = (pName, el) => { if (el.value) properties[pName] = { select: { name: el.value } }; };
     ['STAGE', 'RESOLUTION', 'SOURCE', 'Gender'].forEach(p => addSelect(p, document.getElementById(`dd-${p.toLowerCase()}`)));
-    
     if (statusSelect.value) properties.Status = { status: { name: statusSelect.value } };
-    
     const selectedLangs = Array.from(languajeSelect.options).filter(o => o.selected).map(o => ({ name: o.value }));
     if (selectedLangs.length > 0) properties.LANGUAJE = { multi_select: selectedLangs };
-    
     const phoneVal = dataFields.phone.value; if (phoneVal) properties.Phone = { phone_number: phoneVal };
-    
     const addRichText = (pName, field) => { if (field.value) properties[pName] = { rich_text: [{ text: { content: field.value } }] }; };
     addRichText('LOCATION', dataFields.location);
     addRichText('CURRENT COMPANY', dataFields.company);
     addRichText('SALARY EXPECTATION', dataFields.salary);
-
     if (dataFields.email.value) properties.Email = { email: dataFields.email.value };
     if (dataFields.linkedin.value) properties["LINKEDIN URL"] = { url: dataFields.linkedin.value };
     if (dataFields.skills.value) properties.Skills = { multi_select: dataFields.skills.value.split(',').map(s => ({ name: s.trim() })).filter(s => s.name) };
-
-    const headers = {
-        'Authorization': `Bearer ${tokenInput.value}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28'
-    };
+    const headers = { 'Authorization': `Bearer ${tokenInput.value}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' };
     return await callApiProxy(`${NOTION_API_URL}/pages`, 'POST', headers, { parent: { database_id: NOTION_DATABASE_ID }, properties });
 }
 </script>
