@@ -296,36 +296,21 @@ async function callApiProxy(targetUrl, method, apiHeaders, body = null) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl, method, headers: apiHeaders, body })
     });
-    const responseBody = await response.json();
     if (!response.ok) {
-        throw new Error(responseBody.error || `Error del proxy: ${response.statusText}`);
+        const errorText = await response.text();
+        // Intentar parsear como JSON, si falla, mostrar el texto plano.
+        try {
+            const errorJson = JSON.parse(errorText);
+            throw new Error(errorJson.error || `Error del proxy: ${response.statusText}`);
+        } catch(e) {
+            throw new Error(`Error del proxy: ${errorText}`);
+        }
     }
-    return responseBody;
+    return response.json();
 }
 
 async function getAiParsedData(apiKey, cvText) {
-    // **PROMPT MEJORADO CON REGLAS DE SKILLS MÁS ESTRICTAS**
-    const prompt = `
-        Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta:
-        {
-          "name": "string",
-          "email": "string",
-          "phone": "string; formato +codigopaisNUMERO, sin espacios, puntos ni guiones",
-          "location": "string; solo 'Ciudad, País'",
-          "linkedin": "string; si es un texto con hipervínculo, extrae la URL real",
-          "company": "string",
-          "skills": ["string"],
-          "salary": "string"
-        }
-        Para el campo "skills", sigue estas reglas ESTRICTAS:
-        1.  **Job Titles:** Incluye un MÁXIMO de 3 de los puestos de trabajo más recientes. El último puesto DEBE estar incluido. No repitas puestos si son muy similares (ej: 'Senior Developer' es suficiente, no incluyas también 'Developer').
-        2.  **Tecnologías:** Adicionalmente, incluye SIN LÍMITE los lenguajes de programación, frameworks, bases de datos y tecnologías clave que encuentres.
-        3.  Combina ambos puntos en un solo array de strings para el campo "skills".
-        Si un dato no se encuentra, déjalo vacío.
-        CV: ---
-        ${cvText}
-        ---
-    `;
+    const prompt = `Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta: { "name": "string", "email": "string", "phone": "string; formato +codigopaisNUMERO, sin espacios, puntos ni guiones", "location": "string; solo 'Ciudad, País'", "linkedin": "string; si es un texto con hipervínculo, extrae la URL real", "company": "string", "skills": ["string", "Array de MÁXIMO 3 job titles recientes. Adicionalmente, array SIN LÍMITE de tecnologías, lenguajes de programación o frameworks clave."], "salary": "string" }. Si un dato no se encuentra, déjalo vacío. CV: --- ${cvText} ---`;
     const payload = { contents: [{ parts: [{ text: prompt }] }] };
     const data = await callApiProxy(GEMINI_API_URL_BASE + apiKey, 'POST', {}, payload);
     if (!data.candidates) {
@@ -355,10 +340,8 @@ async function loadDropdownData() {
 
 function populateSelect(selectElement, options, propertyName) {
     selectElement.innerHTML = '';
-    if (propertyName !== 'LANGUAJE') {
-        // No ordenar, mantener el orden de Notion
-    } else { 
-        options.sort((a, b) => {
+    if (propertyName !== 'LANGUAJE') { /* No ordenar */ } 
+    else { options.sort((a, b) => { /* Orden para idiomas */
             const nameA = a.name.toLowerCase(), nameB = b.name.toLowerCase(); let pA = 2, pB = 2;
             if (nameA.startsWith('english')) pA = 0; else if (nameA.startsWith('spanish')) pA = 1;
             if (nameB.startsWith('english')) pB = 0; else if (nameB.startsWith('spanish')) pB = 1;
@@ -370,6 +353,15 @@ function populateSelect(selectElement, options, propertyName) {
     }
     options.forEach(opt => { const o = document.createElement('option'); o.value = opt.name; o.textContent = opt.name; selectElement.appendChild(o); });
 }
+
+// **INICIO DE LA CORRECCIÓN**
+async function findDuplicateByEmail(email) {
+    const headers = { 'Authorization': `Bearer ${tokenInput.value}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' };
+    const body = { filter: { property: 'Email', email: { equals: email } } };
+    const response = await callApiProxy(`${NOTION_API_URL}/databases/${NOTION_DATABASE_ID}/query`, 'POST', headers, body);
+    return response.results;
+}
+// **FIN DE LA CORRECCIÓN**
 
 async function createNotionEntry() {
     const properties = { "Nombre y Apellido": { title: [{ text: { content: dataFields.name.value } }] } };
