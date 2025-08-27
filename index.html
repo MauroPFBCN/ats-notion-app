@@ -262,7 +262,7 @@ function populateFormFields(data) {
     Object.keys(data).forEach(key => {
         if (dataFields[key]) {
             let value = Array.isArray(data[key]) ? data[key].join(', ') : data[key];
-            if (key === 'phone') value = (value || '').replace(/[\s.-]/g, ''); // Limpia espacios, puntos y guiones
+            if (key === 'phone') value = (value || '').replace(/[\s.-]/g, '');
             if (key === 'salary' && dataFields.salary.value) return;
             dataFields[key].value = value || '';
         }
@@ -304,7 +304,28 @@ async function callApiProxy(targetUrl, method, apiHeaders, body = null) {
 }
 
 async function getAiParsedData(apiKey, cvText) {
-    const prompt = `Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta: { "name": "string", "email": "string", "phone": "string; formato +codigopaisNUMERO, sin espacios, puntos ni guiones", "location": "string; solo 'Ciudad, País'", "linkedin": "string; si es un texto con hipervínculo, extrae la URL real", "company": "string", "skills": ["string", "Array de MÁXIMO 3 job titles recientes. Adicionalmente, array SIN LÍMITE de tecnologías, lenguajes de programación o frameworks clave."], "salary": "string" }. Si un dato no se encuentra, déjalo vacío. CV: --- ${cvText} ---`;
+    // **PROMPT MEJORADO CON REGLAS DE SKILLS MÁS ESTRICTAS**
+    const prompt = `
+        Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta:
+        {
+          "name": "string",
+          "email": "string",
+          "phone": "string; formato +codigopaisNUMERO, sin espacios, puntos ni guiones",
+          "location": "string; solo 'Ciudad, País'",
+          "linkedin": "string; si es un texto con hipervínculo, extrae la URL real",
+          "company": "string",
+          "skills": ["string"],
+          "salary": "string"
+        }
+        Para el campo "skills", sigue estas reglas ESTRICTAS:
+        1.  **Job Titles:** Incluye un MÁXIMO de 3 de los puestos de trabajo más recientes. El último puesto DEBE estar incluido. No repitas puestos si son muy similares (ej: 'Senior Developer' es suficiente, no incluyas también 'Developer').
+        2.  **Tecnologías:** Adicionalmente, incluye SIN LÍMITE los lenguajes de programación, frameworks, bases de datos y tecnologías clave que encuentres.
+        3.  Combina ambos puntos en un solo array de strings para el campo "skills".
+        Si un dato no se encuentra, déjalo vacío.
+        CV: ---
+        ${cvText}
+        ---
+    `;
     const payload = { contents: [{ parts: [{ text: prompt }] }] };
     const data = await callApiProxy(GEMINI_API_URL_BASE + apiKey, 'POST', {}, payload);
     if (!data.candidates) {
@@ -344,7 +365,6 @@ function populateSelect(selectElement, options, propertyName) {
             if (pA !== pB) return pA - pB; return nameA.localeCompare(nameB);
         });
     }
-    // **MODIFICACIÓN**: Dejar la primera opción en blanco y seleccionable
     if (!selectElement.multiple) {
         selectElement.innerHTML = '<option value=""></option>';
     }
@@ -353,19 +373,16 @@ function populateSelect(selectElement, options, propertyName) {
 
 async function createNotionEntry() {
     const properties = { "Nombre y Apellido": { title: [{ text: { content: dataFields.name.value } }] } };
-    
-    // Formatear LinkedIn URL
     let linkedInUrl = dataFields.linkedin.value.trim();
     if (linkedInUrl && !linkedInUrl.startsWith('http')) {
         linkedInUrl = `https://www.linkedin.com/in/${linkedInUrl.replace(/^\//, '')}`;
     }
-
     const addSelect = (pName, el) => { if (el.value) properties[pName] = { select: { name: el.value } }; };
     ['STAGE', 'RESOLUTION', 'SOURCE', 'Gender'].forEach(p => addSelect(p, document.getElementById(`dd-${p.toLowerCase()}`)));
     if (statusSelect.value) properties.Status = { status: { name: statusSelect.value } };
     const selectedLangs = Array.from(languajeSelect.options).filter(o => o.selected).map(o => ({ name: o.value }));
     if (selectedLangs.length > 0) properties.LANGUAJE = { multi_select: selectedLangs };
-    const phoneVal = dataFields.phone.value.replace(/[\s.-]/g, ''); // Doble limpieza por si se edita manualmente
+    const phoneVal = dataFields.phone.value.replace(/[\s.-]/g, '');
     if (phoneVal) properties.Phone = { phone_number: phoneVal };
     const addRichText = (pName, field) => { if (field.value) properties[pName] = { rich_text: [{ text: { content: field.value } }] }; };
     addRichText('LOCATION', dataFields.location);
