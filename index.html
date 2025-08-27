@@ -259,14 +259,25 @@ function showDuplicateModal(name, url) {
 }
 
 function populateFormFields(data) {
-    Object.keys(data).forEach(key => {
-        if (dataFields[key]) {
-            let value = Array.isArray(data[key]) ? data[key].join(', ') : data[key];
-            if (key === 'phone') value = (value || '').replace(/[\s.-]/g, '');
-            if (key === 'salary' && dataFields.salary.value) return;
-            dataFields[key].value = value || '';
-        }
-    });
+    // Rellenar campos simples
+    dataFields.name.value = data.name || '';
+    dataFields.email.value = data.email || '';
+    dataFields.phone.value = (data.phone || '').replace(/[\s.-]/g, '');
+    dataFields.location.value = data.location || '';
+    dataFields.linkedin.value = data.linkedin || '';
+    dataFields.company.value = data.company || '';
+    if (data.salary && !dataFields.salary.value) {
+        dataFields.salary.value = data.salary;
+    }
+
+    // Combinar todas las skills extraídas en un solo array
+    let allSkills = [];
+    if (data.extracted_skills) {
+        const { job_titles = [], programming_languages = [], frameworks_libraries = [], databases = [] } = data.extracted_skills;
+        allSkills = [...job_titles, ...programming_languages, ...frameworks_libraries, ...databases];
+    }
+    // Eliminar duplicados y rellenar el campo
+    dataFields.skills.value = [...new Set(allSkills)].join(', ');
 }
 
 async function extractTextFromPdf(file) {
@@ -296,21 +307,35 @@ async function callApiProxy(targetUrl, method, apiHeaders, body = null) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl, method, headers: apiHeaders, body })
     });
+    const responseBody = await response.json();
     if (!response.ok) {
-        const errorText = await response.text();
-        // Intentar parsear como JSON, si falla, mostrar el texto plano.
-        try {
-            const errorJson = JSON.parse(errorText);
-            throw new Error(errorJson.error || `Error del proxy: ${response.statusText}`);
-        } catch(e) {
-            throw new Error(`Error del proxy: ${errorText}`);
-        }
+        throw new Error(responseBody.error || `Error del proxy: ${response.statusText}`);
     }
-    return response.json();
+    return responseBody;
 }
 
 async function getAiParsedData(apiKey, cvText) {
-    const prompt = `Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta: { "name": "string", "email": "string", "phone": "string; formato +codigopaisNUMERO, sin espacios, puntos ni guiones", "location": "string; solo 'Ciudad, País'", "linkedin": "string; si es un texto con hipervínculo, extrae la URL real", "company": "string", "skills": ["string", "Array de MÁXIMO 3 job titles recientes. Adicionalmente, array SIN LÍMITE de tecnologías, lenguajes de programación o frameworks clave."], "salary": "string" }. Si un dato no se encuentra, déjalo vacío. CV: --- ${cvText} ---`;
+    // **PROMPT MEJORADO CON ESTRUCTURA GRANULAR**
+    const prompt = `
+        Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta.
+        Si un campo no se encuentra, déjalo como un string vacío "" o un array vacío [].
+        {
+          "name": "string",
+          "email": "string",
+          "phone": "string; formato +codigopaisNUMERO, sin espacios",
+          "location": "string; solo 'Ciudad, País'",
+          "linkedin": "string; si es un hipervínculo, extrae la URL",
+          "company": "string",
+          "salary": "string",
+          "extracted_skills": {
+            "job_titles": ["string", "Array con MÁXIMO 3 de los puestos más recientes. El último puesto DEBE estar incluido. No repitas puestos si son muy similares."],
+            "programming_languages": ["string", "Array con MÁXIMO 3 lenguajes de programación principales."],
+            "frameworks_libraries": ["string", "Array con MÁXIMO 3 frameworks o librerías principales."],
+            "databases": ["string", "Array con MÁXIMO 1 base de datos principal."]
+          }
+        }
+        CV: --- ${cvText} ---
+    `;
     const payload = { contents: [{ parts: [{ text: prompt }] }] };
     const data = await callApiProxy(GEMINI_API_URL_BASE + apiKey, 'POST', {}, payload);
     if (!data.candidates) {
@@ -340,8 +365,10 @@ async function loadDropdownData() {
 
 function populateSelect(selectElement, options, propertyName) {
     selectElement.innerHTML = '';
-    if (propertyName !== 'LANGUAJE') { /* No ordenar */ } 
-    else { options.sort((a, b) => { /* Orden para idiomas */
+    if (propertyName !== 'LANGUAJE') {
+        // No ordenar, mantener el orden de Notion
+    } else { 
+        options.sort((a, b) => {
             const nameA = a.name.toLowerCase(), nameB = b.name.toLowerCase(); let pA = 2, pB = 2;
             if (nameA.startsWith('english')) pA = 0; else if (nameA.startsWith('spanish')) pA = 1;
             if (nameB.startsWith('english')) pB = 0; else if (nameB.startsWith('spanish')) pB = 1;
@@ -354,14 +381,12 @@ function populateSelect(selectElement, options, propertyName) {
     options.forEach(opt => { const o = document.createElement('option'); o.value = opt.name; o.textContent = opt.name; selectElement.appendChild(o); });
 }
 
-// **INICIO DE LA CORRECCIÓN**
 async function findDuplicateByEmail(email) {
     const headers = { 'Authorization': `Bearer ${tokenInput.value}`, 'Content-Type': 'application/json', 'Notion-Version': '2022-06-28' };
     const body = { filter: { property: 'Email', email: { equals: email } } };
     const response = await callApiProxy(`${NOTION_API_URL}/databases/${NOTION_DATABASE_ID}/query`, 'POST', headers, body);
     return response.results;
 }
-// **FIN DE LA CORRECCIÓN**
 
 async function createNotionEntry() {
     const properties = { "Nombre y Apellido": { title: [{ text: { content: dataFields.name.value } }] } };
