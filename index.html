@@ -259,7 +259,6 @@ function showDuplicateModal(name, url) {
 }
 
 function populateFormFields(data) {
-    // Rellenar campos simples
     dataFields.name.value = data.name || '';
     dataFields.email.value = data.email || '';
     dataFields.phone.value = (data.phone || '').replace(/[\s.-]/g, '');
@@ -270,13 +269,12 @@ function populateFormFields(data) {
         dataFields.salary.value = data.salary;
     }
 
-    // Combinar todas las skills extraídas en un solo array
+    // Combinar las skills de la nueva estructura granular
     let allSkills = [];
-    if (data.extracted_skills) {
-        const { job_titles = [], programming_languages = [], frameworks_libraries = [], databases = [] } = data.extracted_skills;
+    if (data.skills_breakdown) {
+        const { job_titles = [], programming_languages = [], frameworks_libraries = [], databases = [] } = data.skills_breakdown;
         allSkills = [...job_titles, ...programming_languages, ...frameworks_libraries, ...databases];
     }
-    // Eliminar duplicados y rellenar el campo
     dataFields.skills.value = [...new Set(allSkills)].join(', ');
 }
 
@@ -315,7 +313,7 @@ async function callApiProxy(targetUrl, method, apiHeaders, body = null) {
 }
 
 async function getAiParsedData(apiKey, cvText) {
-    // **PROMPT MEJORADO CON ESTRUCTURA GRANULAR**
+    // **PROMPT MEJORADO CON ESTRUCTURA GRANULAR PARA SKILLS**
     const prompt = `
         Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta.
         Si un campo no se encuentra, déjalo como un string vacío "" o un array vacío [].
@@ -327,8 +325,8 @@ async function getAiParsedData(apiKey, cvText) {
           "linkedin": "string; si es un hipervínculo, extrae la URL",
           "company": "string",
           "salary": "string",
-          "extracted_skills": {
-            "job_titles": ["string", "Array con MÁXIMO 3 de los puestos más recientes. El último puesto DEBE estar incluido. No repitas puestos si son muy similares."],
+          "skills_breakdown": {
+            "job_titles": ["string", "Array con MÁXIMO 1 o 2 TÍTULOS DE PUESTO GENERALIZADOS. Analiza los puestos recientes (ej: 'Manager of Software Development', 'Sr Software Engineer') y resúmelos en un término genérico (ej: 'Software Development'). No incluyas varios títulos si son de la misma categoría."],
             "programming_languages": ["string", "Array con MÁXIMO 3 lenguajes de programación principales."],
             "frameworks_libraries": ["string", "Array con MÁXIMO 3 frameworks o librerías principales."],
             "databases": ["string", "Array con MÁXIMO 1 base de datos principal."]
