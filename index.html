@@ -259,23 +259,19 @@ function showDuplicateModal(name, url) {
 }
 
 function populateFormFields(data) {
-    dataFields.name.value = data.name || '';
-    dataFields.email.value = data.email || '';
-    dataFields.phone.value = (data.phone || '').replace(/[\s.-]/g, '');
-    dataFields.location.value = data.location || '';
-    dataFields.linkedin.value = data.linkedin || '';
-    dataFields.company.value = data.company || '';
-    if (data.salary && !dataFields.salary.value) {
-        dataFields.salary.value = data.salary;
-    }
-
-    // Combinar las skills de la nueva estructura granular
-    let allSkills = [];
-    if (data.skills_breakdown) {
-        const { job_titles = [], programming_languages = [], frameworks_libraries = [], databases = [] } = data.skills_breakdown;
-        allSkills = [...job_titles, ...programming_languages, ...frameworks_libraries, ...databases];
-    }
-    dataFields.skills.value = [...new Set(allSkills)].join(', ');
+    Object.keys(data).forEach(key => {
+        if (key === 'skills_breakdown') {
+            let allSkills = [];
+            const { job_titles = [], programming_languages = [], frameworks_libraries = [], databases = [] } = data.skills_breakdown;
+            allSkills = [...job_titles, ...programming_languages, ...frameworks_libraries, ...databases];
+            dataFields.skills.value = [...new Set(allSkills)].join(', ');
+        } else if (dataFields[key]) {
+            let value = data[key];
+            if (key === 'phone') value = (value || '').replace(/[\s.-]/g, '');
+            if (key === 'salary' && dataFields.salary.value) return;
+            dataFields[key].value = value || '';
+        }
+    });
 }
 
 async function extractTextFromPdf(file) {
@@ -305,44 +301,43 @@ async function callApiProxy(targetUrl, method, apiHeaders, body = null) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl, method, headers: apiHeaders, body })
     });
-    const responseBody = await response.json();
+
+    // **INICIO DE LA CORRECCIÓN DE ERROR**
+    // Leer el cuerpo de la respuesta como texto para poder inspeccionarlo siempre
+    const responseBodyText = await response.text();
+
+    // Si la respuesta no fue exitosa (ej: 404, 500, 502), lanzar un error claro
     if (!response.ok) {
-        throw new Error(responseBody.error || `Error del proxy: ${response.statusText}`);
+        // Esto mostrará el error real de Netlify, como "Function invocation timed out"
+        throw new Error(`Error del Proxy (${response.status}): ${responseBodyText}`);
     }
-    return responseBody;
+
+    // Si la respuesta fue exitosa, intentar interpretarla como JSON
+    try {
+        return JSON.parse(responseBodyText);
+    } catch (e) {
+        throw new Error("El proxy devolvió una respuesta exitosa, pero no era un JSON válido.");
+    }
+    // **FIN DE LA CORRECCIÓN DE ERROR**
 }
 
 async function getAiParsedData(apiKey, cvText) {
-    // **PROMPT MEJORADO CON ESTRUCTURA GRANULAR PARA SKILLS**
-    const prompt = `
-        Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta.
-        Si un campo no se encuentra, déjalo como un string vacío "" o un array vacío [].
-        {
-          "name": "string",
-          "email": "string",
-          "phone": "string; formato +codigopaisNUMERO, sin espacios",
-          "location": "string; solo 'Ciudad, País'",
-          "linkedin": "string; si es un hipervínculo, extrae la URL",
-          "company": "string",
-          "salary": "string",
-          "skills_breakdown": {
-            "job_titles": ["string", "Array con MÁXIMO 1 o 2 TÍTULOS DE PUESTO GENERALIZADOS. Analiza los puestos recientes (ej: 'Manager of Software Development', 'Sr Software Engineer') y resúmelos en un término genérico (ej: 'Software Development'). No incluyas varios títulos si son de la misma categoría."],
-            "programming_languages": ["string", "Array con MÁXIMO 3 lenguajes de programación principales."],
-            "frameworks_libraries": ["string", "Array con MÁXIMO 3 frameworks o librerías principales."],
-            "databases": ["string", "Array con MÁXIMO 1 base de datos principal."]
-          }
-        }
-        CV: --- ${cvText} ---
-    `;
+    const prompt = `Eres un asistente de RRHH experto. Analiza el CV y devuelve un JSON con esta estructura exacta. Si un campo no se encuentra, déjalo como un string vacío "" o un array vacío []. { "name": "string", "email": "string", "phone": "string; formato +codigopaisNUMERO, sin espacios", "location": "string; solo 'Ciudad, País'", "linkedin": "string; si es un hipervínculo, extrae la URL", "company": "string", "salary": "string", "skills_breakdown": { "job_titles": ["string", "Array con MÁXIMO 1 o 2 TÍTULOS DE PUESTO GENERALIZADOS. Analiza los puestos recientes y resúmelos en un término genérico (ej: 'Software Development')."], "programming_languages": ["string", "Array con MÁXIMO 3 lenguajes de programación principales."], "frameworks_libraries": ["string", "Array con MÁXIMO 3 frameworks o librerías principales."], "databases": ["string", "Array con MÁXIMO 1 base de datos principal."] } } CV: --- ${cvText} ---`;
     const payload = { contents: [{ parts: [{ text: prompt }] }] };
     const data = await callApiProxy(GEMINI_API_URL_BASE + apiKey, 'POST', {}, payload);
     if (!data.candidates) {
         console.error("Respuesta de IA inesperada:", data);
-        throw new Error(data.promptFeedback?.blockReason ? `Respuesta bloqueada por seguridad: ${data.promptFeedback.blockReason}` : "La IA devolvió una respuesta inesperada.");
+        if (data.promptFeedback && data.promptFeedback.blockReason) {
+            throw new Error(`La IA bloqueó la respuesta. Razón: ${data.promptFeedback.blockReason}`);
+        }
+        throw new Error("La IA devolvió una respuesta inesperada.");
     }
     const textResponse = data.candidates[0].content.parts[0].text;
     const jsonMatch = textResponse.match(/```json\n([\s\S]*?)\n```/);
-    if (!jsonMatch) throw new Error("La IA no devolvió un JSON válido.");
+    if (!jsonMatch) {
+        console.error("Respuesta completa de la IA que causó el error:", textResponse);
+        throw new Error("La IA no devolvió un JSON válido. Revisa la consola (Ctrl+Shift+I) para ver la respuesta completa.");
+    }
     return JSON.parse(jsonMatch[1]);
 }
 
@@ -363,10 +358,8 @@ async function loadDropdownData() {
 
 function populateSelect(selectElement, options, propertyName) {
     selectElement.innerHTML = '';
-    if (propertyName !== 'LANGUAJE') {
-        // No ordenar, mantener el orden de Notion
-    } else { 
-        options.sort((a, b) => {
+    if (propertyName !== 'LANGUAJE') { /* No ordenar */ } 
+    else { options.sort((a, b) => { /* Orden para idiomas */
             const nameA = a.name.toLowerCase(), nameB = b.name.toLowerCase(); let pA = 2, pB = 2;
             if (nameA.startsWith('english')) pA = 0; else if (nameA.startsWith('spanish')) pA = 1;
             if (nameB.startsWith('english')) pB = 0; else if (nameB.startsWith('spanish')) pB = 1;
