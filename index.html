@@ -52,8 +52,14 @@
         .btn:disabled { background-color: #a5b4fc; cursor: not-allowed; transform: none; box-shadow: none; }
         .btn.secondary { background-color: var(--secondary-color); }
         .btn.secondary:hover { background-color: #4b5563; }
-        .btn-small { padding: 0.5rem 1rem; font-size: 0.875rem; flex: 0; }
         .settings { padding: 1rem; border-radius: 12px; margin-bottom: 1.5rem; border: 1px solid var(--border-color); }
+        .input-toggle { display: flex; border: 1px solid var(--border-color); border-radius: 8px; overflow: hidden; margin-bottom: 1rem; }
+        .toggle-btn {
+            flex: 1; padding: 0.75rem; background-color: var(--surface-color); border: none;
+            cursor: pointer; font-size: 1rem; color: var(--secondary-color); transition: all 0.2s;
+        }
+        .toggle-btn.active { background-color: var(--primary-color); color: #fff; font-weight: 600; }
+        #cv-url-input { display: none; }
         .message { padding: 1rem; border-radius: 8px; margin-top: 1.5rem; text-align: center; display: none; }
         .message.success { background-color: #d1fae5; color: #065f46; border: 1px solid #a7f3d0; }
         .message.error { background-color: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
@@ -72,15 +78,6 @@
         .modal-content a { color: var(--primary-color); font-weight: 600; text-decoration: none; }
         .modal-content a:hover { text-decoration: underline; }
         .modal-buttons { display: flex; gap: 1rem; margin-top: 1.5rem; }
-        /* Estilos para la Cola de Carga */
-        #upload-queue { max-height: 200px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.5rem; }
-        .queue-item { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem; border-bottom: 1px solid var(--border-color); }
-        .queue-item:last-child { border-bottom: none; }
-        .queue-item-name { flex-grow: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 1rem; }
-        .queue-item-status { font-weight: 600; font-size: 0.8rem; padding: 0.2rem 0.5rem; border-radius: 6px; }
-        .status-pending { color: #9ca3af; background-color: #f3f4f6; }
-        .status-success { color: #065f46; background-color: #d1fae5; }
-        .status-error { color: #991b1b; background-color: #fee2e2; }
     </style>
 </head>
 <body>
@@ -95,11 +92,7 @@
     </div>
     <h2>1. Entrada y Configuración</h2>
     <div class="form-section">
-        <div><label for="cv-file-input">Sube uno o varios CVs (PDF)</label><input type="file" id="cv-file-input" accept=".pdf" multiple></div>
-        <div id="upload-queue-container" style="display:none; margin-top: 1.5rem;">
-            <label>Cola de Carga Manual</label>
-            <div id="upload-queue"></div>
-        </div>
+        <div class="grid"><div style="grid-column: 1 / -1;"><label>Fuente del Candidato</label><div class="input-toggle"><button class="toggle-btn active" id="toggle-file">Subir CV (PDF)</button><button class="toggle-btn" id="toggle-url">URL de LinkedIn</button></div><input type="file" id="cv-file-input" accept=".pdf" style="display: block;"><input type="url" id="cv-url-input" placeholder="https://www.linkedin.com/in/usuario/"></div></div>
         <div class="grid" style="margin-top: 1.5rem;">
             <div><label for="dd-stage">STAGE</label><select id="dd-stage"></select></div>
             <div><label for="dd-resolution">RESOLUTION</label><select id="dd-resolution"></select></div>
@@ -110,9 +103,10 @@
         </div>
         <div class="grid" style="margin-top: 1.5rem;"><div style="grid-column: 1 / -1;"><label for="dd-languaje">LANGUAJE <small>(Mantén Ctrl/Cmd para seleccionar varios)</small></label><input type="text" id="languaje-search" placeholder="Buscar idioma..." style="margin-bottom: 0.5rem; background-color: #fff;"><select id="dd-languaje" multiple></select></div></div>
     </div>
-    
-    <div id="parsed-data-section">
-        <h2>2. Datos del Candidato (Puedes editar antes de enviar)</h2>
+    <div class="button-group"><button class="btn secondary" id="parse-btn">2. Analizar con IA</button><button class="btn" id="send-btn" disabled>3. Enviar a Notion</button></div>
+    <div id="message-box" class="message"></div>
+    <div id="parsed-data-section" style="display: none;">
+        <h2>4. Datos Extraídos (Puedes editar antes de enviar)</h2>
         <div class="form-section"><div class="grid">
             <div><label for="data-name">Nombre y Apellido</label><input type="text" id="data-name"></div>
             <div><label for="data-email">Email</label><input type="email" id="data-email"></div>
@@ -123,8 +117,6 @@
             <div style="grid-column: 1 / -1;"><label for="data-skills">Skills</label><input type="text" id="data-skills"></div>
         </div></div>
     </div>
-    <div class="button-group"><button class="btn" id="send-btn">3. Enviar a Notion</button></div>
-    <div id="message-box" class="message"></div>
 </div>
 
 <div id="duplicate-modal" class="modal-backdrop">
@@ -144,18 +136,14 @@ const NOTION_DATABASE_ID = "e6cf390e4b8546e8a5e0d25eba52d598";
 const NOTION_API_URL = "https://api.notion.com/v1";
 const GEMINI_API_URL_BASE = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=";
 
-// ---------- ESTADO GLOBAL ----------
-let fileQueue = [];
-
 // ---------- ELEMENTOS DEL DOM ----------
 const tokenInput = document.getElementById('notion-token'), geminiKeyInput = document.getElementById('gemini-key'),
-      fileInput = document.getElementById('cv-file-input'), uploadQueueContainer = document.getElementById('upload-queue-container'),
-      uploadQueue = document.getElementById('upload-queue'),
       languajeSearchInput = document.getElementById('languaje-search'),
       stageSelect = document.getElementById('dd-stage'), resolutionSelect = document.getElementById('dd-resolution'),
       statusSelect = document.getElementById('dd-status'), sourceSelect = document.getElementById('dd-source'),
       genderSelect = document.getElementById('dd-gender'), languajeSelect = document.getElementById('dd-languaje'),
-      sendBtn = document.getElementById('send-btn'), messageBox = document.getElementById('message-box'),
+      parseBtn = document.getElementById('parse-btn'), sendBtn = document.getElementById('send-btn'),
+      messageBox = document.getElementById('message-box'), parsedDataSection = document.getElementById('parsed-data-section'),
       duplicateModal = document.getElementById('duplicate-modal'), modalText = document.getElementById('modal-text'),
       modalCancelBtn = document.getElementById('modal-cancel-btn'), modalConfirmBtn = document.getElementById('modal-confirm-btn'),
       dataFields = {
@@ -179,9 +167,13 @@ languajeSearchInput.addEventListener('keyup', () => {
         opt.style.display = opt.textContent.toLowerCase().includes(filter) ? "" : "none";
     });
 });
-fileInput.addEventListener('change', (event) => {
-    fileQueue = Array.from(event.target.files);
-    renderQueue();
+document.getElementById('toggle-file').addEventListener('click', () => {
+    document.getElementById('toggle-file').classList.add('active'); document.getElementById('toggle-url').classList.remove('active');
+    document.getElementById('cv-file-input').style.display = 'block'; document.getElementById('cv-url-input').style.display = 'none';
+});
+document.getElementById('toggle-url').addEventListener('click', () => {
+    document.getElementById('toggle-url').classList.add('active'); document.getElementById('toggle-file').classList.remove('active');
+    document.getElementById('cv-url-input').style.display = 'block'; document.getElementById('cv-file-input').style.display = 'none';
 });
 
 function showMessage(type, text, duration = 0) {
@@ -190,11 +182,40 @@ function showMessage(type, text, duration = 0) {
     if (duration > 0) setTimeout(() => { messageBox.style.display = 'none'; }, duration);
 }
 
+parseBtn.addEventListener('click', async () => {
+    parseBtn.disabled = true; parseBtn.textContent = 'Analizando...'; sendBtn.disabled = true;
+    showMessage('info', 'Iniciando análisis...');
+    try {
+        if (!geminiKeyInput.value) throw new Error('La Clave de API de Gemini es necesaria.');
+        let contentToParse = '';
+        if (document.getElementById('toggle-file').classList.contains('active')) {
+            const file = document.getElementById('cv-file-input').files[0];
+            if (!file) throw new Error('Por favor, selecciona un archivo PDF.');
+            contentToParse = await extractTextFromPdf(file);
+        } else {
+            const url = document.getElementById('cv-url-input').value;
+            if (!url) throw new Error('Por favor, introduce una URL.');
+            contentToParse = `Extrae datos del perfil de LinkedIn: ${url}`;
+        }
+        showMessage('info', 'Contactando con la IA de Google...');
+        const parsedData = await getAiParsedData(geminiKeyInput.value, contentToParse);
+        populateFormFields(parsedData);
+        parsedDataSection.style.display = 'block'; sendBtn.disabled = false;
+        showMessage('success', 'Análisis completado. Revisa y edita los datos antes de enviar.', 5000);
+    } catch (error) {
+        showMessage('error', `Error en el análisis: ${error.message}`);
+    } finally {
+        parseBtn.disabled = false; parseBtn.textContent = '2. Analizar con IA';
+    }
+});
+
 sendBtn.addEventListener('click', async () => {
-    sendBtn.disabled = true; sendBtn.textContent = 'Verificando...';
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Verificando...';
     if (!dataFields.name.value) {
         showMessage('error', "El campo 'Nombre y Apellido' es obligatorio.");
-        sendBtn.disabled = false; sendBtn.textContent = '3. Enviar a Notion'; return;
+        sendBtn.disabled = false; sendBtn.textContent = '3. Enviar a Notion';
+        return;
     }
     const email = dataFields.email.value.trim();
     if (!email) { await proceedWithCreation(); return; }
@@ -202,7 +223,7 @@ sendBtn.addEventListener('click', async () => {
         const duplicates = await findDuplicateByEmail(email);
         if (duplicates.length > 0) {
             const existing = duplicates[0];
-            const name = existing.properties["Nombre y Apellido"].title[0]?.plain_text || 'Sin Nombre';
+            const name = existing.properties["Nombre y Apellido"].title[0].plain_text;
             const url = existing.url;
             showDuplicateModal(name, url);
         } else { await proceedWithCreation(); }
@@ -218,7 +239,6 @@ async function proceedWithCreation() {
         const newPage = await createNotionEntry();
         showMessage('success', '¡Candidato creado con éxito!', 3000);
         if (newPage && newPage.url) window.open(newPage.url, '_blank');
-        Object.values(dataFields).forEach(field => field.value = ''); // Limpiar campos
     } catch (error) {
         showMessage('error', `Error al enviar a Notion: ${error.message}`);
     } finally {
@@ -254,49 +274,6 @@ function populateFormFields(data) {
     });
 }
 
-// ---------- LÓGICA DE COLA DE CARGA MANUAL ----------
-function renderQueue() {
-    uploadQueueContainer.style.display = fileQueue.length > 0 ? 'block' : 'none';
-    uploadQueue.innerHTML = '';
-    fileQueue.forEach((file, index) => {
-        const item = document.createElement('div');
-        item.className = 'queue-item';
-        item.innerHTML = `
-            <span class="queue-item-name">${file.name}</span>
-            <span id="status-${index}" class="queue-item-status status-pending">Pendiente</span>
-            <button id="analyze-${index}" class="btn btn-small secondary">Analizar</button>
-        `;
-        uploadQueue.appendChild(item);
-        
-        document.getElementById(`analyze-${index}`).addEventListener('click', () => handleAnalyze(file, index));
-    });
-}
-
-async function handleAnalyze(file, index) {
-    const analyzeBtn = document.getElementById(`analyze-${index}`);
-    const statusEl = document.getElementById(`status-${index}`);
-    
-    analyzeBtn.disabled = true;
-    analyzeBtn.textContent = '...';
-    Object.values(dataFields).forEach(field => field.value = ''); // Limpiar campos antes de analizar
-
-    try {
-        if (!geminiKeyInput.value) throw new Error('La Clave de API de Gemini es necesaria.');
-        const contentToParse = await extractTextFromPdf(file);
-        const parsedData = await getAiParsedData(geminiKeyInput.value, contentToParse);
-        populateFormFields(parsedData);
-        statusEl.className = 'queue-item-status status-success';
-        statusEl.textContent = 'Analizado (OK)';
-    } catch (error) {
-        showMessage('error', `Error al analizar ${file.name}: ${error.message}`);
-        statusEl.className = 'queue-item-status status-error';
-        statusEl.textContent = 'Error';
-    } finally {
-        analyzeBtn.style.display = 'none'; // Ocultar botón después de usarlo
-    }
-}
-
-
 async function extractTextFromPdf(file) {
     const reader = new FileReader();
     return new Promise((resolve, reject) => {
@@ -324,15 +301,24 @@ async function callApiProxy(targetUrl, method, apiHeaders, body = null) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: targetUrl, method, headers: apiHeaders, body })
     });
+
+    // **INICIO DE LA CORRECCIÓN DE ERROR**
+    // Leer el cuerpo de la respuesta como texto para poder inspeccionarlo siempre
     const responseBodyText = await response.text();
+
+    // Si la respuesta no fue exitosa (ej: 404, 500, 502), lanzar un error claro
     if (!response.ok) {
+        // Esto mostrará el error real de Netlify, como "Function invocation timed out"
         throw new Error(`Error del Proxy (${response.status}): ${responseBodyText}`);
     }
+
+    // Si la respuesta fue exitosa, intentar interpretarla como JSON
     try {
         return JSON.parse(responseBodyText);
     } catch (e) {
-        throw new Error("El proxy devolvió una respuesta que no era un JSON válido.");
+        throw new Error("El proxy devolvió una respuesta exitosa, pero no era un JSON válido.");
     }
+    // **FIN DE LA CORRECCIÓN DE ERROR**
 }
 
 async function getAiParsedData(apiKey, cvText) {
